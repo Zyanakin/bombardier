@@ -41,6 +41,7 @@ type bombardier struct {
 	requests  *fhist.Histogram
 
 	client   client
+	clients  []client
 	doneChan chan struct{}
 
 	// RPS metrics
@@ -141,7 +142,10 @@ func newBombardier(c config) (*bombardier, error) {
 		bytesRead:    &b.bytesRead,
 		bytesWritten: &b.bytesWritten,
 	}
-	b.client = makeHTTPClient(c.clientType, cc)
+	//b.client = makeHTTPClient(c.clientType, cc)
+	for i := uint64(0); i < c.numConns; i++ {
+		b.clients = append(b.clients, makeHTTPClient(c.clientType, cc))
+	}
 
 	if !b.conf.printProgress {
 		b.bar.Output = ioutil.Discard
@@ -248,21 +252,21 @@ func (b *bombardier) writeStatistics(
 	atomic.AddUint64(counter, 1)
 }
 
-func (b *bombardier) performSingleRequest() {
-	code, usTaken, err := b.client.do()
+func (b *bombardier) performSingleRequest(i uint64) {
+	code, usTaken, err := b.clients[i].do()
 	if err != nil {
 		b.errors.add(err)
 	}
 	b.writeStatistics(code, usTaken)
 }
 
-func (b *bombardier) worker() {
+func (b *bombardier) worker(i uint64) {
 	done := b.barrier.done()
 	for b.barrier.tryGrabWork() {
 		if b.ratelimiter.pace(done) == brk {
 			break
 		}
-		b.performSingleRequest()
+		b.performSingleRequest(i)
 		b.barrier.jobDone()
 	}
 }
@@ -332,10 +336,10 @@ func (b *bombardier) bombard() {
 	bombardmentBegin := time.Now()
 	b.start = time.Now()
 	for i := uint64(0); i < b.conf.numConns; i++ {
-		go func() {
+		go func(i uint64) {
 			defer b.wg.Done()
-			b.worker()
-		}()
+			b.worker(i)
+		}(i)
 	}
 	go b.rateMeter()
 	go b.barUpdater()
@@ -440,7 +444,13 @@ func (b *bombardier) disableOutput() {
 	b.bar.NotPrint = true
 }
 
+var cookies []string
+var clientNo int64
+
 func main() {
+	clientNo = 0
+	h, _ := os.ReadFile("cookies")
+	cookies = strings.Split(string(h), "\n")
 	cfg, err := parser.parse(os.Args)
 	if err != nil {
 		fmt.Println("Error parsing the arguments:", err)

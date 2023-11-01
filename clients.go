@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -126,8 +127,9 @@ type httpClient struct {
 func newHTTPClient(opts *clientOpts) client {
 	c := new(httpClient)
 	tr := &http.Transport{
-		TLSClientConfig:     opts.tlsConfig,
-		MaxIdleConnsPerHost: int(opts.maxConns),
+		TLSClientConfig: opts.tlsConfig,
+		//MaxIdleConnsPerHost: int(opts.maxConns),
+		MaxIdleConnsPerHost: 1,
 		DisableKeepAlives:   opts.disableKeepAlives,
 		ForceAttemptHTTP2:   opts.HTTP2,
 	}
@@ -143,7 +145,13 @@ func newHTTPClient(opts *clientOpts) client {
 	c.client = cl
 
 	c.headers = headersToHTTPHeaders(opts.headers)
+	c.headers["Cookie"] = []string{cookies[clientNo]}
+
 	c.method, c.body, c.bodProd = opts.method, opts.body, opts.bodProd
+
+	s := strings.Replace(*opts.body, "{", fmt.Sprintf("{\"chat_id\":\"%d01\",", clientNo+100000), 1)
+	c.body = &s
+	clientNo++
 	var err error
 	c.url, err = urlx.Parse(opts.url)
 	if err != nil {
@@ -158,7 +166,6 @@ func (c *httpClient) do() (
 	code int, usTaken uint64, err error,
 ) {
 	req := &http.Request{}
-
 	req.Header = c.headers
 	req.Method = c.method
 	req.URL = c.url
@@ -186,6 +193,9 @@ func (c *httpClient) do() (
 	} else {
 		code = resp.StatusCode
 
+		//bd, _ := io.ReadAll(resp.Body)
+		//fmt.Println(string(bd))
+
 		_, berr := io.Copy(ioutil.Discard, resp.Body)
 		if berr != nil {
 			err = berr
@@ -194,6 +204,7 @@ func (c *httpClient) do() (
 		if cerr := resp.Body.Close(); cerr != nil {
 			err = cerr
 		}
+
 	}
 	usTaken = uint64(time.Since(start).Nanoseconds() / 1000)
 
